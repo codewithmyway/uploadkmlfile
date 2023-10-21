@@ -1,0 +1,91 @@
+ public function importKml(Request $request)
+    {
+         $zones=Zone::listing($request);
+        return view('zones.import_kml',compact('zones'));
+    }
+
+    public function uploadKml(Request $request)
+    {
+        $zone_name = $request->zone_name;
+        $zone_type_id = $request->zone_type_id;
+        if ($request->hasFile('boundary')) {
+            Zone::truncate();
+            $kmlFile = $request->file('boundary');
+            if ($kmlFile->getClientOriginalExtension() === 'kml') {
+                $kml = loadKmlFile($kmlFile);
+                if ($kml) {
+                    foreach ($kml->Document->Placemark as $placemark) {
+                        $name = (string)$placemark->name;
+                        /* Check if MultiGeometry exists in Kml files */
+                        if (isset($placemark->MultiGeometry)
+                         && isset($placemark->MultiGeometry->Polygon)
+                         && isset($placemark->MultiGeometry->Polygon->outerBoundaryIs)) {
+                            $coordinates = null;
+                            if (isset($placemark->MultiGeometry->Polygon->outerBoundaryIs->LinearRing->coordinates)) {
+                                $coordinates = (string)$placemark->MultiGeometry->Polygon->outerBoundaryIs->LinearRing->coordinates;
+                                /*Zone Type Mapping Data */
+                                $zone_type = (string)$placemark->zone_type;
+                                $zoneTypeMappings = [
+                                    'parking' => 1,
+                                    'pit' => 2,
+                                    'loading'=>3,
+                                    'dumping'=>4,
+                                    'towards loading'=>5,
+                                    'towards dumping'=>6,
+                                    'haul route'=>7,
+                                    'weighbridge'=>8,
+                                    'fuel'=>9,
+                                    'maintenance'=>10
+                                ];
+                                if($zone_type){
+                                    $zone_type_id = $zoneTypeMappings[$zone_type];
+                                }else{
+
+                                }
+                                $polygonCoordinate = explode('|', $coordinates);
+                                $convertedData = array();
+                                foreach ($polygonCoordinate as $coordinate) {
+                                    $dataMultiPoygon = preg_replace('/0\b/', '', $coordinate);
+                                    $trimDataPolygon = trim($dataMultiPoygon, " \t\n\r\"");
+                                    $PolygonActualPoints = explode(',', $trimDataPolygon);
+                                    array_pop($PolygonActualPoints);
+                                     $swappedData = array();
+                                foreach ($PolygonActualPoints as $key => $value) {
+                                    if ($key % 2 == 0) {
+                                        // If the key is even, swap with the next value
+                                        $swappedData[] = $PolygonActualPoints[$key + 1];
+                                        $swappedData[] = $value;
+                                    }
+                                }
+                                $newFormat = array();
+                                $numberOfPoints = count($swappedData) / 2;
+                                for ($i = 0; $i < $numberOfPoints; $i++) {
+                                    $lat = $swappedData[$i * 2];
+                                    $lon = $swappedData[$i * 2 + 1];
+                                    $newFormat[] = "$lat,$lon";
+                                }
+
+                                $polygonBoundary = implode('|,', $newFormat);
+                                }//for each Kml Documents end
+                            }
+                            $input['zone_name']=trim($name);
+                            $input['zone_type_id']=$zone_type_id;
+                            $input['boundary']=setPolygon($polygonBoundary);
+                            if($zone_type_id){
+                               $input=array_merge($input,ZoneType::getEventName($zone_type_id));
+                            }
+                            $zone=Zone::create($input);
+                        } else {
+
+                        }
+                    }
+                }
+            } else {
+                return redirect()->route('zones.importkml')->with('error', __('Invalid KML file. Please upload a KML file.'));
+            }
+        } else {
+            return redirect()->route('zones.importkml')->with('error', __('KML file not provided.'));
+        }
+
+        return redirect()->route('zones.index')->with('success', __('KML uploaded Successfully'));
+    }
